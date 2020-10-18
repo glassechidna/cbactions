@@ -1,0 +1,150 @@
+Parameters:
+  KmsKeyArn:
+    Type: String
+  Cluster:
+    Type: String
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  ImageSuffix:
+    Type: String
+
+Resources:
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: !Sub ghcr.io/glassechidna/cbactions:worker-${ImageSuffix}
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          env:
+            exported-variables:
+              - RUNNER_EXITCODE
+          phases:
+            build:
+              commands:
+                - entrypoint
+                - export RUNNER_EXITCODE=$(cat /tmp/cbactions_exitcode.txt)
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service: codebuild.amazonaws.com
+      Policies:
+        - PolicyName: AllowLogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: !Ref KmsKeyArn
+              - Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Effect: Allow
+                Resource:
+                  - !Sub arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/codebuild/*
+                  - !Sub arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/codebuild/*:*
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: cbactions
+      TaskRoleArn: !Ref TaskRole
+      Volumes: []
+      Cpu: 512
+      Memory: 1024
+      NetworkMode: awsvpc
+      ExecutionRoleArn: !Ref ExecutionRole
+      ContainerDefinitions:
+        - Name: cbactions
+          Image: !Sub ghcr.io/glassechidna/cbactions:listener-${ImageSuffix}
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: CODEBUILD_PROJECT_NAME
+              Value: !Ref CodeBuildProject
+            - Name: KMS_KEY_ARN
+              Value: !Ref KmsKeyArn
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-create-group: "true"
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: cbactions
+              awslogs-stream-prefix: cbactions
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [ecs-tasks.amazonaws.com]
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AllowThings
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: kms:Encrypt
+                Resource: !Ref KmsKeyArn
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                Resource: !GetAtt CodeBuildProject.Arn
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter*
+                  - ssm:PutParameter
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cbactions
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cbactions/*
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service: [ecs-tasks.amazonaws.com]
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: AllowLogGroupCreate
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: logs:CreateLogGroup
+                Resource: "*"
+#
+#  Service:
+#    Type: AWS::ECS::Service
+#    Properties:
+#      ServiceName: cbactions
+#      Cluster: !Ref Cluster
+#      TaskDefinition: !Ref TaskDefinition
+#      DesiredCount: 1
+#      LaunchType: FARGATE
+#      NetworkConfiguration:
+#        AwsvpcConfiguration:
+#          AssignPublicIp: ENABLED
+#          Subnets: !Ref SubnetIds
