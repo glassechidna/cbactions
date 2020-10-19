@@ -13,11 +13,17 @@ You can have have all the benefits of GitHub Actions:
 * AWS VPC network connectivity
 * AWS IAM roles
 
-## Setup instructions
+## How do I set this up?
 
-TODO
+This is ludicrously alpha, so I'm just putting it out there as a proof-of-concept
+right now. I'll document how to set it up when I think it's not completely
+unreliable.
 
-## How it works
+## Can I at least see a screenshot of what it looks like?
+
+![demo screenshot](/docs/screenshot.png)
+
+## How does it work?
 
 Forewarning: it's not pretty. There are at least three processes in play.
 
